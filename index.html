@@ -49,6 +49,9 @@ input[type=text]{font:inherit;font-size:16px;width:100%;min-height:46px;border:1
 .sheetscale{transform-origin:0 0}
 .sheet{width:210mm;height:296.5mm;background:#fff;position:relative;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.25)}
 .sheet img{position:absolute;left:62.2mm;width:85.6mm;height:54mm;display:none}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:8px}.seg label{display:flex;align-items:center;gap:8px;border:1px solid #d0d5dd;border-radius:10px;padding:10px;min-height:48px;font-size:15px}
+.seg input{width:22px;height:22px;accent-color:var(--blue)}
+input[type=range]{width:100%;height:34px;accent-color:var(--blue)}
 .sheet img.show{display:block}
 #pFront{top:40mm}#pBack{top:114mm}
 .status{font-size:14px;color:var(--mute);min-height:21px;margin:8px 0}
@@ -103,7 +106,8 @@ footer{font-size:12px;color:var(--mute);text-align:center;margin-top:18px}
     <button class="btn" data-act="flip" data-card="front">⇅ 180°</button>
     <button class="btn" data-act="redetect" data-card="front">重新偵測</button>
   </div>
-  <p class="hint" id="hint-front" style="display:none">橘色粗線是證件「上緣」。拖曳圓點調整四角；方向不對請按旋轉。</p>
+  <p class="hint" id="hint-front" style="display:none">橘色粗線是「上緣」，藍框是裁切範圍（含護貝），虛線是證件本體。拖曳圓點調整四角；方向不對請按旋轉。</p>
+  <p class="hint" id="lam-front" style="display:none"></p>
   <img class="thumb" id="th-front" alt="正面裁切結果" style="display:none">
 </section>
 
@@ -117,7 +121,8 @@ footer{font-size:12px;color:var(--mute);text-align:center;margin-top:18px}
     <button class="btn" data-act="flip" data-card="back">⇅ 180°</button>
     <button class="btn" data-act="redetect" data-card="back">重新偵測</button>
   </div>
-  <p class="hint" id="hint-back" style="display:none">橘色粗線是證件「上緣」。拖曳圓點調整四角；方向不對請按旋轉。</p>
+  <p class="hint" id="hint-back" style="display:none">橘色粗線是「上緣」，藍框是裁切範圍（含護貝），虛線是證件本體。拖曳圓點調整四角；方向不對請按旋轉。</p>
+  <p class="hint" id="lam-back" style="display:none"></p>
   <img class="thumb" id="th-back" alt="反面裁切結果" style="display:none">
 </section>
 
@@ -127,6 +132,14 @@ footer{font-size:12px;color:var(--mute);text-align:center;margin-top:18px}
   <div class="row"><label><input type="checkbox" id="optWm"> 加上浮水印</label></div>
   <input type="text" id="wmText" placeholder="例：僅供○○銀行開戶使用" value="僅供○○使用" disabled>
   <p class="hint">浮水印會以半透明斜字蓋在正、反面上。</p>
+  <h3 style="font-size:16px;margin:16px 0 6px">護貝邊界</h3>
+  <div class="seg">
+    <label><input type="radio" name="lamMode" value="auto" checked> 自動（含護貝邊）</label>
+    <label><input type="radio" name="lamMode" value="body"> 不含護貝（只裁證件）</label>
+  </div>
+  <label class="row" style="display:block">額外外擴：<b id="lamExtraV">0</b> mm
+    <input type="range" id="lamExtra" min="0" max="6" step="0.5" value="0"></label>
+  <p class="hint">「自動」會從證件本體往外找護貝膠膜的外緣，找不到的邊預設外推 3mm，避免切掉護貝邊。輸出依實際大小排版。</p>
 </section>
 
 <section class="panel">
@@ -143,7 +156,7 @@ footer{font-size:12px;color:var(--mute);text-align:center;margin-top:18px}
     </div>
     <button class="btn" id="btnImg" disabled>🖼️ 存成圖片（A4，300dpi）</button>
   </div>
-  <p class="hint noprint">PDF 為 A4 直式，證件以實際尺寸 85.6×54mm 置中排版。列印時請選「實際大小／100%」，不要選「符合頁面」。</p>
+  <p class="hint noprint">PDF 為 A4 直式，證件（含護貝邊）以實際尺寸置中排版，證件本體 85.6×54mm。列印時請選「實際大小／100%」，不要選「符合頁面」。</p>
 </section>
 <footer class="noprint">本工具不連網、不使用 Cookie 或本機儲存；關閉頁面即全部清除。</footer>
 </div>
@@ -161,7 +174,7 @@ const $=id=>document.getElementById(id);
 const DBG={};
 const mk=(w,h)=>{const c=document.createElement('canvas');c.width=w;c.height=h;return c;};
 
-function newCard(key,label){return {key,label,src:null,srcData:null,corners:null,s:0,detected:false,base:null,final:null,blob:null,url:null,dirty:true,disp:null,ed:null};}
+function newCard(key,label){return {key,label,src:null,srcData:null,corners:null,body:null,lam:null,manual:false,mm:{w:CARD_W_MM,h:CARD_H_MM},s:0,detected:false,base:null,final:null,blob:null,url:null,dirty:true,disp:null,ed:null};}
 const cards={front:newCard('front','正面'),back:newCard('back','反面')};
 let pdf={blob:null,url:null,ready:false};
 
@@ -408,6 +421,100 @@ function edgeRefine(src,q0){ // snap each side to the strongest step edge along 
     q=nq;}
   return q.map(p=>({x:p.x/k,y:p.y/k}));
 }
+/* ---------------- lamination (護貝) ---------------- */
+// Geometry is done in "card mm space": the body homography maps (0..85.6, 0..54) mm onto the detected body quad,
+// so perspective is handled exactly and offsets are in real millimetres.
+const RECT_MM=[{x:0,y:0},{x:CARD_W_MM,y:0},{x:CARD_W_MM,y:CARD_H_MM},{x:0,y:CARD_H_MM}];
+const LAM_DEFAULT_MM=3, LAM_SIGN=[[-1,-1],[1,-1],[1,1],[-1,1]];
+function applyH(h,p){const d=h[6]*p.x+h[7]*p.y+1;return {x:(h[0]*p.x+h[1]*p.y+h[2])/d,y:(h[3]*p.x+h[4]*p.y+h[5])/d};}
+function ordered(q,s){return [0,1,2,3].map(j=>q[(s+j)%4]);}          // rect-corner order (TL,TR,BR,BL of the output)
+function unordered(r,s){const q=new Array(4);for(let j=0;j<4;j++)q[(s+j)%4]=r[j];return q;}
+function bodyH(card){return homography(RECT_MM,ordered(card.body,card.s));}          // mm -> image
+function bodyHinv(card){return homography(ordered(card.body,card.s),RECT_MM);}       // image -> mm
+// returns {mm:[TL,TR,BR,BL] outer quad in mm space, sides:[{found,off}] for top,right,bottom,left}
+function lamDetect(src,body,s){
+  const k=Math.min(1,1600/Math.max(src.width,src.height));const w=Math.round(src.width*k),h=Math.round(src.height*k);
+  const c=mk(w,h),ctx=c.getContext('2d');ctx.imageSmoothingQuality='high';ctx.drawImage(src,0,0,w,h);
+  const d=ctx.getImageData(0,0,w,h).data,ch=[0,1,2].map(o=>{const a=new Float32Array(w*h);for(let i=0;i<w*h;i++)a[i]=d[i*4+o];return boxBlur(a,w,h,1);});
+  const H=homography(RECT_MM,ordered(body,s).map(p=>({x:p.x*k,y:p.y*k})));
+  const samp=(a,x,y)=>{const x0=x|0,y0=y|0,fx=x-x0,fy=y-y0,i=y0*w+x0;return a[i]*(1-fx)*(1-fy)+a[i+1]*fx*(1-fy)+a[i+w]*(1-fx)*fy+a[i+w+1]*fx*fy;};
+  const col=(mx,my)=>{const p=applyH(H,{x:mx,y:my});if(!(p.x>=1&&p.y>=1&&p.x<w-2&&p.y<h-2))return null;return [samp(ch[0],p.x,p.y),samp(ch[1],p.x,p.y),samp(ch[2],p.x,p.y)];};
+  // side j: point along side at param u (mm) and outward offset o (mm)
+  const P=[(u,o)=>[u,-o],(u,o)=>[CARD_W_MM+o,u],(u,o)=>[u,CARD_H_MM+o],(u,o)=>[-o,u]];
+  const LEN=[CARD_W_MM,CARD_H_MM,CARD_W_MM,CARD_H_MM];
+  const STEP=0.1,O0=1.2,sides=[];
+  for(let j=0;j<4;j++){
+    const L=LEN[j],omax=0.15*(j%2?CARD_W_MM:CARD_H_MM),NO=Math.floor((omax-O0)/STEP)+1,NS=40,prof=[];
+    for(let si=0;si<NS;si++){const u=L*(0.12+0.76*si/(NS-1));const D=new Float32Array(NO);let ok=true;
+      for(let oi=0;oi<NO;oi++){const o=O0+oi*STEP;const A=col(...P[j](u,o-0.2)),B=col(...P[j](u,o+0.2));if(!A||!B){ok=false;break;}
+        D[oi]=Math.abs(A[0]-B[0])+Math.abs(A[1]-B[1])+Math.abs(A[2]-B[2]);}
+      if(ok)prof.push({u,D});}
+    if(prof.length<NS*0.5){sides.push({found:false,off:LAM_DEFAULT_MM,why:'out of frame'});continue;}
+    const all=[];prof.forEach(p=>{for(let i=0;i<NO;i+=3)all.push(p.D[i]);});all.sort((a,b)=>a-b);
+    const noise=Math.max(1.5,all[all.length>>1]);
+    const acc=new Float32Array(NO);prof.forEach(p=>{for(let i=0;i<NO;i++)acc[i]+=Math.min(20,p.D[i]/noise);});
+    for(let i=0;i<NO;i++)acc[i]/=prof.length;
+    // candidate peaks (local maxima), prefer the strongest; ties -> outermost
+    let best=-1;for(let i=2;i<NO-2;i++){if(acc[i]>=acc[i-1]&&acc[i]>=acc[i+1]&&acc[i]>=acc[i-2]&&acc[i]>=acc[i+2]){if(best<0||acc[i]>acc[best]*1.15||(acc[i]>acc[best]*0.87&&i>best))best=i;}}
+    if(best<0||acc[best]<(O0+best*STEP>8?3:2.2)){sides.push({found:false,off:LAM_DEFAULT_MM,why:'weak',peak:best<0?0:acc[best]});continue;}
+    // per sample: local max within ±0.7mm of the peak, must be a clear step
+    const us=[],os=[],W=Math.round(0.7/STEP);
+    for(const p of prof){let bi=-1,bv=0;for(let i=Math.max(0,best-W);i<=Math.min(NO-1,best+W);i++)if(p.D[i]>bv){bv=p.D[i];bi=i;}
+      if(bi>=0&&bv>2.5*noise){us.push(p.u);os.push(O0+bi*STEP);}}
+    if(us.length<prof.length*0.5){sides.push({found:false,off:LAM_DEFAULT_MM,why:'inconsistent',n:us.length});continue;}
+    // robust line fit o = a + b*(u-L/2), require near-parallel (|angle| < 3°)
+    let a=0,b=0,U=us,Oo=os;
+    for(let it=0;it<3;it++){const n=U.length,mu=U.reduce((x,y)=>x+y,0)/n,mo=Oo.reduce((x,y)=>x+y,0)/n;let sxx=0,sxy=0;for(let i=0;i<n;i++){sxx+=(U[i]-mu)**2;sxy+=(U[i]-mu)*(Oo[i]-mo);}
+      b=sxx?sxy/sxx:0;a=mo+b*(L/2-mu);
+      const r=us.map((u,i)=>Math.abs(os[i]-(a+b*(u-L/2))));const med=r.slice().sort((x,y)=>x-y)[r.length>>1],th=Math.max(0.15,2.5*med);
+      const U2=[],O2=[];r.forEach((v,i)=>{if(v<=th){U2.push(us[i]);O2.push(os[i]);}});if(U2.length<8)break;U=U2;Oo=O2;}
+    const ang=Math.atan(Math.abs(b))*180/Math.PI;
+    if(ang>3||U.length<prof.length*0.45||a<O0||a>omax){sides.push({found:false,off:LAM_DEFAULT_MM,why:'fit',ang,n:U.length});continue;}
+    sides.push({found:true,off:a,slope:b,peak:acc[best],n:U.length});
+  }
+  // plausibility: a laminate border is roughly even all round; an edge far wider than the others (or a lone wide one) is background clutter
+  const fo=sides.filter(x=>x.found).map(x=>x.off);
+  sides.forEach(x=>{if(!x.found)return;const others=fo.filter(o=>o!==x.off),ref=others.length?others.sort((a,b)=>a-b)[others.length>>1]:LAM_DEFAULT_MM;
+    if(x.off>ref+3&&x.off>6){x.found=false;x.why='implausible';x.rawOff=x.off;x.off=LAM_DEFAULT_MM;}});
+  return {sides,mm:lamQuadMM(sides,0)};
+}
+// outer quad in mm from per-side lines (+ uniform extra margin)
+function lamQuadMM(sides,extra){
+  const LEN=[CARD_W_MM,CARD_H_MM,CARD_W_MM,CARD_H_MM];
+  // each side as line in mm space: point + direction
+  const line=j=>{const sd=sides[j],o=sd.off+extra,b=sd.found?(sd.slope||0):0,L=LEN[j];
+    const o0=o-b*L/2,o1=o+b*L/2; // offsets at u=0 and u=L
+    const pts=[[[0,-o0],[L,-o1]],[[CARD_W_MM+o0,0],[CARD_W_MM+o1,L]],[[0,CARD_H_MM+o0],[L,CARD_H_MM+o1]],[[-o0,0],[-o1,L]]][j];
+    return {x:pts[0][0],y:pts[0][1],ux:pts[1][0]-pts[0][0],uy:pts[1][1]-pts[0][1]};};
+  const Ls=[0,1,2,3].map(line);
+  const X=(A,B)=>{const den=A.ux*B.uy-A.uy*B.ux;const t=((B.x-A.x)*B.uy-(B.y-A.y)*B.ux)/den;return {x:A.x+A.ux*t,y:A.y+A.uy*t};};
+  return [X(Ls[3],Ls[0]),X(Ls[0],Ls[1]),X(Ls[1],Ls[2]),X(Ls[2],Ls[3])];
+}
+// recompute crop corners and physical size from body + lamination + options
+function updateGeometry(card){
+  if(!card.src)return;
+  const mode=lamMode(),extra=+$('lamExtra').value||0;
+  if(!card.body){ // nothing detected: corners are whatever the user set, size is a guess
+    card.mm=mode==='body'?{w:CARD_W_MM,h:CARD_H_MM}:{w:CARD_W_MM+2*(LAM_DEFAULT_MM+extra),h:CARD_H_MM+2*(LAM_DEFAULT_MM+extra)};return;}
+  if(!card.manual){
+    if(mode==='body')card.corners=card.body.map(p=>({...p}));
+    else{const sides=card.lam?card.lam.sides:[0,1,2,3].map(()=>({found:false,off:LAM_DEFAULT_MM}));
+      const H=bodyH(card);card.corners=unordered(lamQuadMM(sides,extra).map(p=>applyH(H,p)),card.s);}
+  }
+  const m=ordered(card.corners,card.s).map(p=>applyH(bodyHinv(card),p)),dd=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+  let W=(dd(m[0],m[1])+dd(m[3],m[2]))/2,Hh=(dd(m[0],m[3])+dd(m[1],m[2]))/2;
+  if(!(W>=60&&W<=125&&Hh>=38&&Hh<=90)){W=CARD_W_MM+2*LAM_DEFAULT_MM;Hh=CARD_H_MM+2*LAM_DEFAULT_MM;}
+  if(mode==='body'&&!card.manual){W=CARD_W_MM;Hh=CARD_H_MM;}
+  card.mm={w:W,h:Hh};
+}
+function lamMode(){const r=document.querySelector('input[name=lamMode]:checked');return r?r.value:'auto';}
+function lamInfo(card){const el=$('lam-'+card.key);if(!card.src){el.style.display='none';return;}el.style.display='block';
+  const n=['上','右','下','左'];
+  if(lamMode()==='body'){el.textContent='護貝：不含（只裁證件本體 85.6×54mm）';return;}
+  let t='輸出尺寸 '+card.mm.w.toFixed(1)+'×'+card.mm.h.toFixed(1)+'mm';
+  if(card.manual)t+='（手動調整）';
+  else if(card.lam)t+='｜護貝邊：'+card.lam.sides.map((sd,j)=>n[j]+(sd.found?sd.off.toFixed(1)+'mm':'預設'+LAM_DEFAULT_MM+'mm')).join('、');
+  el.textContent=t;}
 function insetCorners(src){const w=src.width,h=src.height;return [{x:.1*w,y:.1*h},{x:.9*w,y:.1*h},{x:.9*w,y:.9*h},{x:.1*w,y:.9*h}];}
 function autoStart(q,src){return trueAspect(q,src.width,src.height)>=1?0:3;}
 
@@ -463,8 +570,8 @@ function drawWatermark(ctx,W,H,text){
   ctx.restore();
 }
 
-function whiteCorners(ctx,W,H){ // ID-1 cards have 3.18mm rounded corners: paint the background bits outside them white
-  const r=Math.round(W*3.18/85.6);ctx.save();ctx.beginPath();ctx.rect(0,0,W,H);
+function whiteCorners(ctx,W,H,rpx){ // paint the background bits outside rounded corners white
+  const r=Math.round(rpx);ctx.save();ctx.beginPath();ctx.rect(0,0,W,H);
   ctx.moveTo(r,0);ctx.arcTo(0,0,0,r,r);ctx.lineTo(0,H-r);ctx.arcTo(0,H,r,H,r);ctx.lineTo(W-r,H);ctx.arcTo(W,H,W,H-r,r);ctx.lineTo(W,r);ctx.arcTo(W,0,W-r,0,r);ctx.closePath();
   ctx.fillStyle='#fff';ctx.fill('evenodd');ctx.restore();
 }
@@ -479,14 +586,16 @@ async function renderAll(){
   try{
     for(const card of Object.values(cards)){
       if(!card.src)continue;
-      if(card.dirty){const w=warpCard(card,OUT_W,OUT_H);if(opt.enh.checked)enhance(w.img);w.ctx.putImageData(w.img,0,0);whiteCorners(w.ctx,OUT_W,OUT_H);card.base=w.canvas;card.dirty=false;}
-      const f=mk(OUT_W,OUT_H),fc=f.getContext('2d');fc.drawImage(card.base,0,0);
-      if(wmOn&&wmT)drawWatermark(fc,OUT_W,OUT_H,wmT);
+      if(card.dirty){const W=Math.round(card.mm.w/25.4*OUT_DPI),H=Math.round(card.mm.h/25.4*OUT_DPI),w=warpCard(card,W,H);if(opt.enh.checked)enhance(w.img);w.ctx.putImageData(w.img,0,0);
+        // ID-1 body corners are R3.18mm; a laminated piece is only rounded slightly (2mm) so the plastic is not painted over
+        const bodyOnly=lamMode()==='body'&&!card.manual;whiteCorners(w.ctx,W,H,(bodyOnly?3.18:2)/25.4*OUT_DPI);card.base=w.canvas;card.dirty=false;}
+      const OW=card.base.width,OH=card.base.height,f=mk(OW,OH),fc=f.getContext('2d');fc.drawImage(card.base,0,0);
+      if(wmOn&&wmT)drawWatermark(fc,OW,OH,wmT);
       const blob=await toBlob(f,'image/jpeg',JPEG_Q);if(seq!==renderSeq)return;
       if(card.url)URL.revokeObjectURL(card.url);
       card.final=f;card.blob=blob;card.url=URL.createObjectURL(blob);
       const th=$('th-'+card.key);th.src=card.url;th.style.display='block';
-      const p=$(card.key==='front'?'pFront':'pBack');p.src=card.url;p.classList.add('show');
+      const p=$(card.key==='front'?'pFront':'pBack');p.src=card.url;p.classList.add('show');card.outMM={w:card.mm.w,h:card.mm.h};
     }
     await buildPdfBlob();if(seq!==renderSeq)return;
     const have=Object.values(cards).filter(c=>c.blob).length;
@@ -526,15 +635,18 @@ function buildPdf(images){ // images: [{bytes,w,h,xmm,ymm,wmm,hmm}]
   push(x+'trailer\n<< /Size '+nObj+' /Root 1 0 R /Info 5 0 R >>\nstartxref\n'+xref+'\n%%EOF\n');
   return new Blob(parts,{type:'application/pdf'});
 }
-function placements(){
-  const x=(A4_W_MM-CARD_W_MM)/2;const list=[];
-  if(cards.front.blob)list.push({card:cards.front,xmm:x,ymm:LAYOUT.top});
-  if(cards.back.blob)list.push({card:cards.back,xmm:x,ymm:LAYOUT.top+CARD_H_MM+LAYOUT.gap});
+function placements(){ // true physical size, centred horizontally; front on top, back below
+  const list=[],F=cards.front,B=cards.back,sz=c=>c.outMM||{w:CARD_W_MM,h:CARD_H_MM};
+  const hF=F.blob?sz(F).h:CARD_H_MM,hB=B.blob?sz(B).h:CARD_H_MM;
+  let top=LAYOUT.top,gap=LAYOUT.gap;if(top+hF+gap+hB>A4_H_MM-15){gap=10;top=Math.max(10,(A4_H_MM-hF-gap-hB)/2);}
+  if(F.blob)list.push({card:F,wmm:sz(F).w,hmm:sz(F).h,xmm:(A4_W_MM-sz(F).w)/2,ymm:top});
+  if(B.blob)list.push({card:B,wmm:sz(B).w,hmm:sz(B).h,xmm:(A4_W_MM-sz(B).w)/2,ymm:top+hF+gap});
+  for(const p of list){const el=$(p.card.key==='front'?'pFront':'pBack');Object.assign(el.style,{left:p.xmm+'mm',top:p.ymm+'mm',width:p.wmm+'mm',height:p.hmm+'mm'});}
   return list;
 }
 async function buildPdfBlob(){
   const pl=placements();if(!pl.length){pdf.ready=false;return;}
-  const images=[];for(const p of pl){images.push({bytes:new Uint8Array(await p.card.blob.arrayBuffer()),w:OUT_W,h:OUT_H,xmm:p.xmm,ymm:p.ymm,wmm:CARD_W_MM,hmm:CARD_H_MM});}
+  const images=[];for(const p of pl){images.push({bytes:new Uint8Array(await p.card.blob.arrayBuffer()),w:p.card.final.width,h:p.card.final.height,xmm:p.xmm,ymm:p.ymm,wmm:p.wmm,hmm:p.hmm});}
   if(pdf.url)URL.revokeObjectURL(pdf.url);
   pdf.blob=buildPdf(images);pdf.url=URL.createObjectURL(pdf.blob);pdf.ready=true;
 }
@@ -557,7 +669,7 @@ $('btnPrint').addEventListener('click',()=>window.print());
 $('btnImg').addEventListener('click',async()=>{
   const DPI=300,px=mm=>Math.round(mm/25.4*DPI);const c=mk(2480,3508),x=c.getContext('2d');
   x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.imageSmoothingQuality='high';
-  for(const p of placements())x.drawImage(p.card.final,px(p.xmm),px(p.ymm),px(CARD_W_MM),px(CARD_H_MM));
+  for(const p of placements())x.drawImage(p.card.final,px(p.xmm),px(p.ymm),px(p.wmm),px(p.hmm));
   const b=await toBlob(c,'image/jpeg',0.92);
   await shareOrDownload(b,'身分證影本_'+dateStr()+'.jpg','image/jpeg');
 });
@@ -580,6 +692,7 @@ function drawEditor(card){
   ctx.beginPath();ctx.rect(0,0,e.cv.width,e.cv.height);ctx.moveTo(P[0].x,P[0].y);for(let i=1;i<4;i++)ctx.lineTo(P[i].x,P[i].y);ctx.closePath();
   ctx.fillStyle='rgba(0,0,0,0.45)';ctx.fill('evenodd');
   ctx.lineWidth=2*e.dpr;ctx.strokeStyle='#4da3ff';ctx.beginPath();ctx.moveTo(P[0].x,P[0].y);for(let i=1;i<=4;i++)ctx.lineTo(P[i%4].x,P[i%4].y);ctx.stroke();
+  if(card.body&&lamMode()!=='body'){const B=card.body.map(p=>({x:p.x*k,y:p.y*k}));ctx.save();ctx.setLineDash([6*e.dpr,5*e.dpr]);ctx.lineWidth=1.5*e.dpr;ctx.strokeStyle='rgba(255,255,255,.85)';ctx.beginPath();ctx.moveTo(B[0].x,B[0].y);for(let i=1;i<=4;i++)ctx.lineTo(B[i%4].x,B[i%4].y);ctx.stroke();ctx.restore();}
   const a=P[card.s],b=P[(card.s+1)%4];ctx.lineWidth=5*e.dpr;ctx.strokeStyle='#ff9800';ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
   const mx=(a.x+b.x)/2,my=(a.y+b.y)/2;ctx.font='bold '+(13*e.dpr)+'px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
   ctx.fillStyle='#ff9800';ctx.beginPath();ctx.arc(mx,my,12*e.dpr,0,7);ctx.fill();ctx.fillStyle='#fff';ctx.fillText('上',mx,my+0.5);
@@ -599,7 +712,9 @@ function hitHandle(card,pos){let bi=-1,bd=44;card.corners.forEach((p,i)=>{const 
 function startDrag(card,pos){const i=hitHandle(card,pos);if(i<0)return false;const p=card.corners[i];card.ed.drag=i;card.ed.ox=p.x*card.ed.sc-pos.x;card.ed.oy=p.y*card.ed.sc-pos.y;drawEditor(card);return true;}
 function moveDrag(card,pos){const e=card.ed;if(e.drag<0)return;const W=card.src.width,H=card.src.height;
   card.corners[e.drag]={x:Math.max(0,Math.min(W,(pos.x+e.ox)/e.sc)),y:Math.max(0,Math.min(H,(pos.y+e.oy)/e.sc))};requestDraw(card);}
-function endDrag(card){if(card.ed.drag<0)return;card.ed.drag=-1;drawEditor(card);card.dirty=true;card.detected=false;setChip(card,'已手動調整','ok');scheduleRender();}
+function endDrag(card){if(card.ed.drag<0)return;card.ed.drag=-1;
+  if(lamMode()==='body'||!card.body){card.body=card.corners.map(p=>({...p}));card.manual=false;if(lamMode()!=='body'){try{card.lam=lamDetect(card.src,card.body,card.s);}catch(e){}}}else card.manual=true;
+  updateGeometry(card);lamInfo(card);drawEditor(card);card.dirty=true;card.detected=false;setChip(card,'已手動調整','ok');scheduleRender();}
 let rafPending=new Set();function requestDraw(card){if(rafPending.has(card))return;rafPending.add(card);requestAnimationFrame(()=>{rafPending.delete(card);drawEditor(card);});}
 function bindEditor(card){
   const cv=$('cv-'+card.key);
@@ -616,15 +731,18 @@ function setChip(card,t,cls){const c=$('chip-'+card.key);c.textContent=t;c.class
 function busy(on){$('busy').classList.toggle('on',on);}
 function runDetect(card){
   let r=null;try{r=detectCard(card.src);}catch(e){console.error(e);}
+  card.manual=false;card.lam=null;card.body=null;
   if(r){card.corners=sortCorners(r.corners);try{const rq=edgeRefine(card.src,card.corners);if(isConvex(rq))card.corners=rq;}catch(e){console.warn(e);}card.detected=true;setChip(card,'已自動偵測，請確認四角','ok');}
   else{card.corners=insetCorners(card.src);card.detected=false;setChip(card,'未偵測到，請拖曳四角','warn');}
   card.s=autoStart(card.corners,card.src);card.dirty=true;card.score=r?r.score:0;
+  if(r){card.body=card.corners.map(p=>({...p}));try{card.lam=lamDetect(card.src,card.body,card.s);}catch(e){console.warn(e);}}
+  updateGeometry(card);
 }
 async function setPhoto(key,file){
   const card=cards[key];busy(true);
   try{
     await new Promise(r=>setTimeout(r,30));
-    card.src=await loadFile(file);card.srcData=null;runDetect(card);
+    card.src=await loadFile(file);card.srcData=null;runDetect(card);lamInfo(card);
     $('empty-'+key).style.display='none';$('edw-'+key).style.display='flex';$('tools-'+key).style.display='grid';$('hint-'+key).style.display='block';
     layoutEditor(card);scheduleRender(0);
   }catch(e){alert(e.message||'讀取失敗');}
@@ -638,13 +756,21 @@ $('fileBack').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(
 $('fileBoth').onchange=async e=>{const fs=[...e.target.files];e.target.value='';if(fs[0])await setPhoto('front',fs[0]);if(fs[1])await setPhoto('back',fs[1]);if(fs.length>2)alert('只會使用前兩張照片');};
 document.querySelectorAll('[data-act]').forEach(b=>b.addEventListener('click',()=>{
   const card=cards[b.dataset.card];if(!card.src)return;const a=b.dataset.act;
+  if(a==='redetect'){busy(true);setTimeout(()=>{runDetect(card);lamInfo(card);drawEditor(card);busy(false);scheduleRender(0);},30);return;}
+  const s0=card.s;
   if(a==='cw')card.s=(card.s+3)%4;else if(a==='ccw')card.s=(card.s+1)%4;else if(a==='flip')card.s=(card.s+2)%4;
-  else if(a==='redetect'){busy(true);setTimeout(()=>{runDetect(card);drawEditor(card);busy(false);scheduleRender(0);},30);return;}
+  if(card.s!==s0&&card.lam&&(card.s-s0+4)%2){ // 90° turn: the side roles change, re-run lamination search for the new orientation
+    try{card.lam=lamDetect(card.src,card.body,card.s);}catch(e){}}
+  else if(card.s!==s0&&card.lam){const r=(card.s-s0+4)%4;card.lam.sides=[0,1,2,3].map(j=>card.lam.sides[(j+r)%4]);}
+  updateGeometry(card);lamInfo(card);
   card.dirty=true;drawEditor(card);scheduleRender(0);
 }));
 opt.enh.onchange=()=>{Object.values(cards).forEach(c=>c.dirty=true);scheduleRender(0);};
 opt.wm.onchange=()=>{opt.wmt.disabled=!opt.wm.checked;scheduleRender(0);};
 opt.wmt.oninput=()=>{if(opt.wm.checked)scheduleRender(500);};
+function lamChanged(delay){Object.values(cards).forEach(c=>{if(!c.src)return;c.manual=false;updateGeometry(c);lamInfo(c);c.dirty=true;drawEditor(c);});scheduleRender(delay);}
+document.querySelectorAll('input[name=lamMode]').forEach(r=>r.onchange=()=>{$('lamExtra').disabled=lamMode()==='body';lamChanged(0);});
+$('lamExtra').oninput=()=>{$('lamExtraV').textContent=$('lamExtra').value;lamChanged(300);};
 bindEditor(cards.front);bindEditor(cards.back);
 function fitSheet(){const box=document.querySelector('.sheetbox'),sc=$('sheetScale'),sh=$('sheetPrint');
   const avail=box.clientWidth-20,full=sh.offsetWidth;const k=Math.min(1,avail/full);sc.style.transform='scale('+k+')';sc.style.height=(sh.offsetHeight*k)+'px';sc.style.width=(full*k)+'px';}
@@ -653,7 +779,7 @@ window.addEventListener('beforeprint',()=>{const sc=$('sheetScale');sc.dataset.t
 window.addEventListener('afterprint',()=>{fitSheet();});
 fitSheet();setBtns();
 // test/debug hook (read-only access, nothing leaves the page)
-window.__idtool={DBG,cards,pdf,detectCard,renderAll,OUT_W,OUT_H,getPdfBase64:async()=>{const b=new Uint8Array(await pdf.blob.arrayBuffer());let s='';for(let i=0;i<b.length;i+=32768)s+=String.fromCharCode.apply(null,b.subarray(i,i+32768));return btoa(s);}};
+window.__idtool={DBG,cards,pdf,placements,lamDetect,detectCard,renderAll,OUT_W,OUT_H,getPdfBase64:async()=>{const b=new Uint8Array(await pdf.blob.arrayBuffer());let s='';for(let i=0;i<b.length;i+=32768)s+=String.fromCharCode.apply(null,b.subarray(i,i+32768));return btoa(s);}};
 })();
 </script>
 </body>
